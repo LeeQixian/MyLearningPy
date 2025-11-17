@@ -1,3 +1,20 @@
+def html_table_to_markdown(table):
+    """
+    将bs4的<table>节点转为Markdown表格字符串
+    """
+    rows = table.find_all('tr')
+    if not rows:
+        return ''
+    md_lines = []
+    # 处理表头
+    headers = [cell.get_text(strip=True) for cell in rows[0].find_all(['th', 'td'])]
+    md_lines.append('| ' + ' | '.join(headers) + ' |')
+    md_lines.append('|' + '|'.join([' --- ' for _ in headers]) + '|')
+    # 处理表体
+    for row in rows[1:]:
+        cells = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
+        md_lines.append('| ' + ' | '.join(cells) + ' |')
+    return '\n'.join(md_lines)
 """
 site: pkulaw.com
     description: 自动检测北大法宝导出的HTML类型（论文/法规/案例），并转换为PKB规范的Markdown文件
@@ -14,7 +31,8 @@ OUTPUT_DIR = 'E:/CODE/Test/Targets/'
 def process_paper(soup):
     metadata = {}
     metadata['title'] = soup.find('h2', class_='title').text.strip()
-    safe_title = re.sub(r'[\\/*?:"<>|]', "", metadata['title'])
+    safe_title = re.sub(r'[\\/*?:"<>|\n\r\t]', "", metadata['title'])
+    safe_title = re.sub(r'\s+', ' ', safe_title).strip()
     output_file = os.path.join(OUTPUT_DIR, f"{safe_title}.md")
     fields_map = {
         '作者：': 'author',
@@ -112,7 +130,18 @@ def process_paper(soup):
     for fn_id, fn_content in sorted(footnotes.items(), key=lambda item: int(item[0])):
         footnote_lines.append(f"[^{fn_id}]: {fn_content}\n")
     footnote_str = "\n".join(footnote_lines)
-    final_md_content = f"{yaml_str}\n\n{abstract_str}\n\n---\n\n#### 前言\n\n{main_body_str}\n{footnote_str}"
+    # 查找所有表格
+    tables = full_text_div.find_all('table') if full_text_div else []
+    table_md = []
+    for table in tables:
+        md = html_table_to_markdown(table)
+        if md:
+            table_md.append(md)
+    if table_md:
+        tables_section = '\n\n---\n\n### 附表\n' + '\n\n'.join(table_md)
+    else:
+        tables_section = ''
+    final_md_content = f"{yaml_str}\n\n{abstract_str}\n\n---\n\n#### 前言\n\n{main_body_str}\n{footnote_str}{tables_section}"
     return final_md_content, output_file
 
 # --- 法规处理逻辑 ---
@@ -124,7 +153,24 @@ def process_regulation(soup):
     title_tag = soup.find('h2', class_='title')
     if title_tag:
         raw_title = ''.join([t for t in title_tag.contents if isinstance(t, NavigableString)]).strip()
-        pure_title = re.sub(r'（.*?）|\(.*?\)', '', raw_title).strip()
+        # 只去除文件名中最后一个括号及其内容（包括中文全角括号和英文半角括号），保留其他括号内容
+        def remove_last_bracket_content(s):
+            import re
+            # 匹配所有全角括号
+            cn = list(re.finditer(r'（([^（）]*?)）', s))
+            # 匹配所有半角括号
+            en = list(re.finditer(r'\(([^()]*)\)', s))
+            all_brackets = cn + en
+            if not all_brackets:
+                return s
+            # 找到最后一个括号对
+            last = max(all_brackets, key=lambda m: m.start())
+            content = last.group(1)
+            # 判断内容是否为单个大写中文数字（如一二三四五六七八九十）
+            if len(content) == 1 and content in '一二三四五六七八九十':
+                return s  # 保留该括号
+            return s[:last.start()] + s[last.end():]
+        pure_title = remove_last_bracket_content(raw_title).strip()
     else:
         raw_title = pure_title = "未知法规"
     metadata['title'] = raw_title
@@ -207,47 +253,87 @@ def process_regulation(soup):
         for fb_dropdown in full_text_div.find_all(class_=['TiaoYinV2', 'c-icon']):
             fb_dropdown.decompose()
         content_parts = []
-        for element in full_text_div.children:
-            if isinstance(element, NavigableString):
-                continue
-            if not hasattr(element, 'name'):
-                continue
-            class_list = element.get('class', []) if element.has_attr('class') else []
-            if 'navbian' in class_list:
-                content_parts.append(f"## {element.get_text(strip=True)}\n")
-            elif 'navzhang' in class_list:
-                content_parts.append(f"### {element.get_text(strip=True)}\n")
-            elif 'navjie' in class_list:
-                content_parts.append(f"#### {element.get_text(strip=True)}\n")
-            elif 'tiao-wrap' in class_list:
-                tiao_span = element.find('span', class_='navtiao')
-                if tiao_span:
-                    tiao_text = re.sub(r'\s+', ' ', tiao_span.get_text(strip=True)).strip()
-                    content_parts.append(f"###### {tiao_text}")
-                for kuan_wrap in element.find_all('div', class_='kuan-wrap'):
-                    kuan_texts = []
-                    contents = kuan_wrap.find_all(class_=['kuan-content', 'xiang-content'])
-                    for content in contents:
-                        if content.find('span', class_='navtiao'):
-                            content.find('span', class_='navtiao').decompose()
-                        cleaned_text = content.get_text().replace('　', '  ').strip()
-                        if cleaned_text:
-                            kuan_texts.append(cleaned_text)
-                    full_kuan_text = "\n".join(kuan_texts)
-                    content_parts.append(full_kuan_text)
-                content_parts.append('')
-            elif element.name == 'div' and element.get('align') == 'center':
-                content_parts.append(element.get_text(separator='\n', strip=True))
-                content_parts.append('')
-            elif element.name == 'p' and element.get_text(strip=True):
-                content_parts.append(element.get_text(strip=True))
+        has_tiao_wrap = any(
+            hasattr(element, 'get') and element.get('class') and 'tiao-wrap' in element.get('class', [])
+            for element in full_text_div.children if hasattr(element, 'get')
+        )
+        if has_tiao_wrap:
+            for element in full_text_div.children:
+                if isinstance(element, NavigableString):
+                    continue
+                if not hasattr(element, 'name'):
+                    continue
+                class_list = element.get('class', []) if element.has_attr('class') else []
+                if 'navbian' in class_list:
+                    content_parts.append(f"## {element.get_text(strip=True)}\n")
+                elif 'navzhang' in class_list:
+                    content_parts.append(f"### {element.get_text(strip=True)}\n")
+                elif 'navjie' in class_list:
+                    content_parts.append(f"#### {element.get_text(strip=True)}\n")
+                elif 'tiao-wrap' in class_list:
+                    tiao_span = element.find('span', class_='navtiao')
+                    if tiao_span:
+                        tiao_text = re.sub(r'\s+', ' ', tiao_span.get_text(strip=True)).strip()
+                        content_parts.append(f"###### {tiao_text}")
+                    for kuan_wrap in element.find_all('div', class_='kuan-wrap'):
+                        kuan_texts = []
+                        contents = kuan_wrap.find_all(class_=['kuan-content', 'xiang-content'])
+                        for content in contents:
+                            if content.find('span', class_='navtiao'):
+                                content.find('span', class_='navtiao').decompose()
+                            cleaned_text = content.get_text().replace('　', '  ').strip()
+                            if cleaned_text:
+                                kuan_texts.append(cleaned_text)
+                        full_kuan_text = "\n".join(kuan_texts)
+                        content_parts.append(full_kuan_text)
+                    content_parts.append('')
+                elif element.name == 'div' and element.get('align') == 'center':
+                    content_parts.append(element.get_text(separator='\n', strip=True))
+                    content_parts.append('')
+                elif element.name == 'p' and element.get_text(strip=True):
+                    content_parts.append(element.get_text(strip=True))
+                    content_parts.append('')
+        else:
+            # 没有 tiao-wrap，直接查找所有 navtiao span，按条标题和正文分组
+            navtiao_spans = full_text_div.find_all('span', class_='navtiao')
+            for navtiao in navtiao_spans:
+                tiao_text = re.sub(r'\s+', ' ', navtiao.get_text(strip=True)).strip()
+                content_parts.append(f"###### {tiao_text}")
+                # 收集该 span 后面紧跟的所有兄弟节点，直到下一个 navtiao 或结束
+                tiao_content = []
+                for sib in navtiao.next_siblings:
+                    if getattr(sib, 'name', None) == 'span' and 'navtiao' in sib.get('class', []):
+                        break
+                    if isinstance(sib, NavigableString):
+                        text = sib.strip()
+                        if text:
+                            tiao_content.append(text)
+                    elif hasattr(sib, 'get_text'):
+                        text = sib.get_text(strip=True)
+                        if text:
+                            tiao_content.append(text)
+                if tiao_content:
+                    content_parts.append("\n".join(tiao_content))
                 content_parts.append('')
         main_content = "\n".join(content_parts)
+        # 查找所有表格
+        tables = full_text_div.find_all('table')
+        table_md = []
+        for table in tables:
+            md = html_table_to_markdown(table)
+            if md:
+                table_md.append(md)
+        if table_md:
+            tables_section = '\n\n---\n\n### 附表\n' + '\n\n'.join(table_md)
+        else:
+            tables_section = ''
+        main_content = main_content + tables_section
     else:
         main_content = "未能找到正文内容。"
     main_content = re.sub(r'。\n(?=.)', '。\n\n', main_content)
     final_markdown = f"{yaml_header}\n\n{main_content}"
-    safe_title = re.sub(r'[\\/*?:"<>|]', "", final_title)
+    safe_title = re.sub(r'[\\/*?:"<>|\n\r\t]', "", final_title)
+    safe_title = re.sub(r'\s+', ' ', safe_title).strip()
     output_file = os.path.join(OUTPUT_DIR, f"{safe_title}.md")
     split1 = final_markdown.find('---', final_markdown.find('---')+3)
     if split1 != -1:
@@ -339,10 +425,24 @@ def process_case(soup):
             span_tag.decompose()
         main_content = full_text_div.get_text(separator='\n\n', strip=True)
         main_content = main_content.replace('[', r'\[').replace(']', r'\]')
+        # 查找所有表格
+        tables = full_text_div.find_all('table')
+        table_md = []
+        for table in tables:
+            md = html_table_to_markdown(table)
+            if md:
+                table_md.append(md)
+        if table_md:
+            tables_section = '\n\n---\n\n### 附表\n' + '\n\n'.join(table_md)
+        else:
+            tables_section = ''
+        main_content = main_content + tables_section
     else:
         main_content = "未能找到正文内容。"
     final_markdown = f"{yaml_header}\n\n{main_content}"
-    output_file = os.path.join(OUTPUT_DIR, f"{metadata.get('案号', '未命名案例')}.md")
+    safe_case_title = re.sub(r'[\\/*?:"<>|\n\r\t]', "", metadata.get('案号', '未命名案例'))
+    safe_case_title = re.sub(r'\s+', ' ', safe_case_title).strip()
+    output_file = os.path.join(OUTPUT_DIR, f"{safe_case_title}.md")
     return final_markdown, output_file
 
 import re
@@ -358,7 +458,7 @@ def detect_type_and_process(html_filepath):
     if code_match:
         citation_code = code_match.group(0)
         # 法律法规（中央/地方法规/中外条约/外国/港澳台/年鉴/英文译本等）
-        if re.match(r'CLI\.(1|11|T|FL|HK|MAC|TW|WR|N|ALE)\.', citation_code) or citation_code.startswith('CLI.WR.'):
+        if re.match(r'CLI\.(1|2|3|11|T|FL|HK|MAC|TW|WR|N|ALE)\.', citation_code) or citation_code.startswith('CLI.WR.'):
             print(f'检测到类型：法规（引证码 {citation_code}）')
             return process_regulation(soup)
         # 案例/判决/仲裁/案例报道/检察文书/行政执法/合同范本/法律文书

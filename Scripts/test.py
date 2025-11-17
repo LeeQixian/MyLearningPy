@@ -1,3 +1,7 @@
+"""
+site: icourse163.org
+	description: 下载网易云课堂视频，支持多线程和断点续传，自动转码为mp4格式。
+"""
 import requests
 from tqdm import tqdm
 import re
