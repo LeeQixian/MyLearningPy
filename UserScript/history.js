@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         北大法宝·本法变迁一键打开
 // @namespace    https://github.com/LeeQixian/MyLearningPy
-// @version      1.1.1
+// @version      1.1.2
 // @description  在北大法宝的法律详情页，于“本法变迁”处添加一个按钮，用于一键在新标签页中打开所有历史版本的法规。
 // @author       LeeQixian
 // @icon         https://www.pkulaw.com/favicon.ico
