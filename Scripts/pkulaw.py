@@ -1,3 +1,17 @@
+
+"""
+site: pkulaw.com
+    description: 自动检测北大法宝导出的HTML类型（论文/法规/案例），并转换为PKB规范的Markdown文件
+"""
+import os
+import re
+from bs4 import BeautifulSoup, NavigableString
+
+# --- 配置区 ---
+INPUT_HTML_FILE = 'E:/CODE/Test/Files/pkulaw.html'  # 你要处理的HTML文件
+OUTPUT_DIR = 'E:/CODE/Test/Targets/'
+
+# --- 网页表格转Markdown --- 
 def html_table_to_markdown(table):
     """
     将bs4的<table>节点转为Markdown表格字符串
@@ -15,17 +29,6 @@ def html_table_to_markdown(table):
         cells = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
         md_lines.append('| ' + ' | '.join(cells) + ' |')
     return '\n'.join(md_lines)
-"""
-site: pkulaw.com
-    description: 自动检测北大法宝导出的HTML类型（论文/法规/案例），并转换为PKB规范的Markdown文件
-"""
-import os
-import re
-from bs4 import BeautifulSoup, NavigableString
-
-# --- 配置区 ---
-INPUT_HTML_FILE = 'E:/CODE/Test/Files/pkulaw.html'  # 你要处理的HTML文件
-OUTPUT_DIR = 'E:/CODE/Test/Targets/'
 
 # --- 论文处理逻辑 ---
 def process_paper(soup):
@@ -445,7 +448,6 @@ def process_case(soup):
     output_file = os.path.join(OUTPUT_DIR, f"{safe_case_title}.md")
     return final_markdown, output_file
 
-import re
 # --- 类型自动检测与主流程 ---
 def detect_type_and_process(html_filepath):
     with open(html_filepath, 'r', encoding='utf-8') as f:
@@ -458,7 +460,7 @@ def detect_type_and_process(html_filepath):
     if code_match:
         citation_code = code_match.group(0)
         # 法律法规（中央/地方法规/中外条约/外国/港澳台/年鉴/英文译本等）
-        if re.match(r'CLI\.(1|2|3|11|T|FL|HK|MAC|TW|WR|N|ALE)\.', citation_code) or citation_code.startswith('CLI.WR.'):
+        if re.match(r'CLI\.(1|2|3|4|11|T|FL|HK|MAC|TW|WR|N|ALE)\.', citation_code) or citation_code.startswith('CLI.WR.'):
             print(f'检测到类型：法规（引证码 {citation_code}）')
             return process_regulation(soup)
         # 案例/判决/仲裁/案例报道/检察文书/行政执法/合同范本/法律文书
