@@ -30,42 +30,37 @@
         return;
     }
 
-    // 2. 提取所有历史版本的ID
-    const versionIds = [];
-    const compareLinks = targetBox.querySelectorAll('ul li div.theme a.lawChange.contrast');
-
-    const regexCompareId = /\/compare\/.*-(.*)\.html/;
-    compareLinks.forEach(link => {
-        const href = link.getAttribute('href');
-        if (href) {
-            const match = href.match(regexCompareId);
-            if (match && match[1]) {
-                versionIds.push(match[1]);
-            }
+    // 2. 提取所有历史版本的正文链接
+    const versionLinks = [];
+    const themeDivs = targetBox.querySelectorAll('ul li div.theme');
+    themeDivs.forEach(themeDiv => {
+        const a = themeDiv.querySelector('a[href^="/chl/"]');
+        if (a) {
+            versionLinks.push('https://www.pkulaw.com' + a.getAttribute('href'));
         }
     });
 
-    if (versionIds.length === 0) {
-        console.log('未找到任何可供对比的历史版本链接。');
+    if (versionLinks.length === 0) {
+        console.log('未找到任何历史版本正文链接。');
         return;
     }
 
     // 3. 处理数据：去重并排除当前页面
-    // 3.1 获取当前页面的ID
-    let currentId = null;
-    const regexCurrentId = /chl\/(.*?)\.html/;
-    const currentUrlMatch = window.location.href.match(regexCurrentId);
-    if (currentUrlMatch && currentUrlMatch[1]) {
-        currentId = currentUrlMatch[1];
+    // 3.1 获取当前页面的正文链接
+    let currentLawUrl = null;
+    const regexCurrentLaw = /\/chl\/([a-zA-Z0-9]+)\.html/;
+    const currentLawMatch = window.location.href.match(regexCurrentLaw);
+    if (currentLawMatch && currentLawMatch[0]) {
+        currentLawUrl = 'https://www.pkulaw.com' + currentLawMatch[0];
     }
 
     // 3.2 去重并过滤
-    const uniqueIds = [...new Set(versionIds)];
-    const finalIdsToOpen = uniqueIds.filter(id => id !== currentId);
+    const uniqueLinks = [...new Set(versionLinks)];
+    const finalLinksToOpen = uniqueLinks.filter(link => link !== currentLawUrl);
 
     // 4. 创建并注入UI（按钮）
     const button = document.createElement('button');
-    button.textContent = `一键打开所有历史版本 (${finalIdsToOpen.length})`;
+    button.textContent = `一键打开所有历史版本 (${finalLinksToOpen.length})`;
     button.title = '在新标签页中打开本法的所有其他历史版本';
     // 添加一些样式，使其看起来更和谐
     Object.assign(button.style, {
@@ -85,46 +80,33 @@
 
     // 5. 绑定点击事件
 // 5. 绑定点击事件 (增强版：分批延时打开)
-button.addEventListener('click', async () => { // <--- 注意这里添加了 async
+button.addEventListener('click', async () => {
     // --- 可配置参数 ---
     const BATCH_SIZE = 5; // 每批打开多少个标签页
     const DELAY_MS = 1000;   // 每批之间的间隔时间（毫秒），1000毫秒 = 1秒
     // -----------------
 
-    if (finalIdsToOpen.length === 0) {
+    if (finalLinksToOpen.length === 0) {
         alert('没有找到可供打开的其他历史版本。');
         return;
     }
 
-    const confirmationMessage = `即将分批打开 ${finalIdsToOpen.length} 个新标签页。\n\n设置：每批 ${BATCH_SIZE} 个，间隔 ${DELAY_MS / 1000} 秒。\n\n是否继续？`;
+    const confirmationMessage = `即将分批打开 ${finalLinksToOpen.length} 个新标签页。\n\n设置：每批 ${BATCH_SIZE} 个，间隔 ${DELAY_MS / 1000} 秒。\n\n是否继续？`;
 
     if (window.confirm(confirmationMessage)) {
-        // 定义一个延时函数
         const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-        // 立即禁用按钮，防止重复点击
         button.disabled = true;
         button.style.cursor = 'not-allowed';
         button.style.backgroundColor = '#d3d3d3';
-
-        for (let i = 0; i < finalIdsToOpen.length; i++) {
-            const id = finalIdsToOpen[i];
-            const urlToOpen = `https://www.pkulaw.com/chl/${id}.html?way=listView`;
-
-            // 更新按钮文本以显示进度
-            button.textContent = `正在打开... (${i + 1}/${finalIdsToOpen.length})`;
-
+        for (let i = 0; i < finalLinksToOpen.length; i++) {
+            const urlToOpen = finalLinksToOpen[i];
+            button.textContent = `正在打开... (${i + 1}/${finalLinksToOpen.length})`;
             GM_openInTab(urlToOpen, { active: false, insert: true });
-
-            // 判断是否达到一批的数量，并且不是最后一个
-            if ((i + 1) % BATCH_SIZE === 0 && (i + 1) < finalIdsToOpen.length) {
-                // 等待指定的间隔时间
+            if ((i + 1) % BATCH_SIZE === 0 && (i + 1) < finalLinksToOpen.length) {
                 await sleep(DELAY_MS);
             }
         }
-
-        // 所有任务完成后，更新按钮最终状态
-        button.textContent = `已全部打开 (${finalIdsToOpen.length})`;
+        button.textContent = `已全部打开 (${finalLinksToOpen.length})`;
     }
 });
 
