@@ -76,15 +76,33 @@ def process_paper(soup):
         if abstract_p:
             abstract = abstract_p.text.strip()
     full_text_div = soup.find('div', id='divFullText')
-    footnotes = {}
+    footnotes = {}  # 脚注 [number]
+    references = {}  # 参考文献 {number}
     footnote_spans = full_text_div.find_all('span', class_='footnote')
     for span in footnote_spans:
         note_id = re.search(r'\[(\d+)\]', span.text)
+        ref_id = re.search(r'\{(\d+)\}', span.text)
         if note_id:
             fn_id = note_id.group(1)
             fn_content = span['content'].strip()
             footnotes[fn_id] = fn_content
             span.replace_with(f'[^{fn_id}]')
+        elif ref_id:
+            fn_id = ref_id.group(1)
+            fn_content = span['content'].strip()
+            references[fn_id] = fn_content
+            span.replace_with(f'[^{"ref_" + fn_id}]')
+
+    # 补充：从 <div class="note-wrap"> 提取所有参考文献
+    note_wrap = soup.find('div', class_='note-wrap')
+    if note_wrap:
+        for p in note_wrap.find_all('p'):
+            m = re.match(r'\{(\d+)\}', p.text.strip())
+            if m:
+                ref_id = m.group(1)
+                ref_content = re.sub(r'^\{\d+\}', '', p.text, 1).strip()
+                if ref_id not in references:
+                    references[ref_id] = ref_content
     main_body_md = []
     heading_patterns = [
         {"pattern": "^[一二三四五六七八九十]、", "level": "####"},
@@ -96,6 +114,8 @@ def process_paper(soup):
         p_text = p.text.strip()
         if not p_text or "【注释】" in p_text or "作者单位：" in p_text:
             continue
+        # 替换正文中的 {n} 为 [^ref_n]
+        p_text = re.sub(r'\{(\d+)\}', lambda m: f'[^{"ref_" + m.group(1)}]', p_text)
         is_heading = False
         for heading in heading_patterns:
             if re.match(heading['pattern'], p_text):
@@ -106,6 +126,7 @@ def process_paper(soup):
         if not is_heading:
             main_body_md.append(p_text + '\n')
     main_body_str = "\n".join(main_body_md)
+    # 处理 YAML 头信息
     yaml_lines = ['---']
     yaml_lines.append(f"title: \"{metadata.get('title', '')}\"")
     if isinstance(metadata.get('author'), list):
@@ -125,14 +146,25 @@ def process_paper(soup):
     yaml_lines.append("Finished: false")
     yaml_lines.append('---')
     yaml_str = "\n".join(yaml_lines)
+    # 摘要判断
     if abstract != "":
         abstract_str = f"> [!abstract]- 摘要\n> {abstract}"
     else:
         abstract_str = ""
-    footnote_lines = ['---', '### 脚注\n']
-    for fn_id, fn_content in sorted(footnotes.items(), key=lambda item: int(item[0])):
-        footnote_lines.append(f"[^{fn_id}]: {fn_content}\n")
+    footnote_lines = []
+    reference_lines = []
+    if footnotes:
+        footnote_lines.append('---')
+        footnote_lines.append('### 脚注\n')
+        for fn_id, fn_content in sorted(footnotes.items(), key=lambda item: int(item[0])):
+            footnote_lines.append(f"[^{fn_id}]: {fn_content}\n")
+    if references:
+        reference_lines.append('---')
+        reference_lines.append('### 参考文献\n')
+        for fn_id, fn_content in sorted(references.items(), key=lambda item: int(item[0])):
+            reference_lines.append(f"[^{'ref_' + fn_id}]: {fn_content}\n")
     footnote_str = "\n".join(footnote_lines)
+    reference_str = "\n".join(reference_lines)
     # 查找所有表格
     tables = full_text_div.find_all('table') if full_text_div else []
     table_md = []
@@ -144,7 +176,7 @@ def process_paper(soup):
         tables_section = '\n\n---\n\n### 附表\n' + '\n\n'.join(table_md)
     else:
         tables_section = ''
-    final_md_content = f"{yaml_str}\n\n{abstract_str}\n\n---\n\n#### 前言\n\n{main_body_str}\n{footnote_str}{tables_section}"
+    final_md_content = f"{yaml_str}\n\n{abstract_str}\n\n---\n\n#### 前言\n\n{main_body_str}\n{footnote_str}{reference_str}{tables_section}"
     return final_md_content, output_file
 
 # --- 法规处理逻辑 ---
